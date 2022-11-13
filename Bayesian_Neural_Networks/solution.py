@@ -15,6 +15,7 @@ from torch.distributions import Poisson, Normal
 from collections import deque
 import copy
 import gpytorch
+from torch.utils.data import random_split
 
 from util import ece, ParameterDistribution, draw_reliability_diagram, draw_confidence_histogram, SGLD
 from enum import Enum
@@ -421,33 +422,48 @@ class SGLDTrainer(Framework):
 
         # Hyperparameters and general parameters
         # TODO: SGLD_4. Do experiments and tune hyperparameters
-        self.batch_size = 128
+        self.batch_size = 100
         self.learning_rate = 1e-3
-        self.num_epochs = 100
-        self.burn_in = 6
-        self.sample_interval = 3
-        self.max_size = 30
-
+        self.num_epochs = 400
+        self.burn_in = 2
+        self.sample_interval = 2
+        self.max_size = 200
 
         # TODO: SGLD_1.  initialize the SGLD network.
         # You can check the Dummy Trainer above for intution about what to do
         self.network = MNISTNet(in_features=28*28,out_features=10)
+        
+        self.dataset_size = len(dataset_train)
+        print('Dataset Size:',self.dataset_size)
+        self.dataset_train_size = int(0.95*self.dataset_size)
+        print('Trainset Size:',self.dataset_train_size)
+        self.dataset_valid_size = int(0.05*self.dataset_size)
+        print('Validation Set Size:',self.dataset_valid_size)
+
+        self.train_set, self.valid_set = random_split(dataset_train,[self.dataset_train_size,self.dataset_valid_size])
+
         self.train_loader = torch.utils.data.DataLoader(
-            dataset_train, batch_size=self.batch_size, shuffle=True, drop_last=True
-            )
+            dataset_train,batch_size=self.batch_size, shuffle=True, drop_last=True)
         
         # SGLD optimizer is provided
-        self.optimizer = SGLD(self.network.parameters(),lr = self.learning_rate)
+        self.optimizer = SGLD(self.network.parameters(),lr = self.learning_rate, weight_decay=0.1)
 
         # deques support bi-directional addition and deletion
         # You can add models in the right side of a deque by append()
         # You can delete models in the left side of a deque by popleft()
         
-        self.SGLDSequence = deque() 
+        self.SGLDSequence = deque()
+
+
 
     def train(self):
         num_iter = 0
         print('Training model')
+
+        # Annealing parameters
+        a = 0.01
+        b = 20
+        gamma = -0.65
 
         self.network.train()
         progress_bar = trange(self.num_epochs)
@@ -457,7 +473,7 @@ class SGLDTrainer(Framework):
 
             for batch_idx, (batch_x, batch_y) in enumerate(self.train_loader):
                 self.network.zero_grad()
-
+  
                 # Perform forward pass
                 current_logits = self.network(batch_x)
 
@@ -469,7 +485,14 @@ class SGLDTrainer(Framework):
                 # Backpropagate to get the gradients
                 loss.backward()
 
+
                 self.optimizer.step()
+
+                # Learning rate annealing
+                lr = a*(b+num_iter)**(gamma)
+
+                for param_group in self.optimizer.param_groups:
+                    param_group['lr'] = lr
 
                 if batch_idx % self.print_interval == 0:
                     current_logits = self.network(batch_x)
@@ -483,7 +506,7 @@ class SGLDTrainer(Framework):
                 self.SGLDSequence.append(copy.deepcopy(self.network)) # add model
             if len(self.SGLDSequence) > self.max_size:
                 self.SGLDSequence.popleft() # remove model
-            print(len(self.SGLDSequence))
+            print('\n SGLD Models saved:',len(self.SGLDSequence))
             
 
 
@@ -491,18 +514,28 @@ class SGLDTrainer(Framework):
         assert x.shape[1] == 28 ** 2
         estimated_probability = None
         len_sgld = len(self.SGLDSequence)
+        running_average_prediction = []
+        running_average = None
         out = []
         # TODO SGLD_3: Implement SGLD predictions here
         # You need to obtain the prediction from each network
         # in SGLDSequence and combine the predictions
-        for i in range(0,len_sgld):
-            self.network = self.SGLDSequence[i]
-            self.network.eval()
-            estimated_probability = F.softmax(self.network(x), dim=1)
-            out.append(estimated_probability)
+        with torch.no_grad():
+            for i in range(0,len_sgld):
+                self.network = self.SGLDSequence[i]
+                self.network.eval()
+                #for batch_idx, (batch_x, batch_y) in enumerate(self.valid_loader):
+                #    current_logits = self.network(batch_x)
+                #    current_accuracy = (current_logits.argmax(axis=1) == batch_y).float().mean()
+                #    current_acc_tensor = torch.stack(current_accuracy)
+                #    current_acc_mean = torch.mean(current_acc_tensor, dim=0)
+                #    print('current_acc_mean', current_acc_mean)
+                estimated_probability = F.softmax(self.network(x), dim=1)
+                out.append(estimated_probability)
+
         out = torch.stack(out)
         mean = torch.mean(out, dim=0)
-        assert mean.shape == (x.shape[0], 10) 
+        assert mean.shape == (x.shape[0], 10)
         return mean
 
 
