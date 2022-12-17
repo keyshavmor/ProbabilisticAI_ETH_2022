@@ -413,8 +413,8 @@ def train(env, seed=0):
     # The longest an episode can go on before cutting it off
     max_ep_len = 300
     # Discount factor for weighting future rewards
-    gamma = 0.99
-    lam = 0.97
+    gamma = 0.995
+    lam = 0.92
 
     # Learning rates for actor and critic function
     actor_lr = 9e-3
