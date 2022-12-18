@@ -61,7 +61,8 @@ def mlp(sizes, activation, output_activation=nn.Identity):
     for layer_idx in range(num_layers):
         layers.append(torch.nn.Linear(sizes[layer_idx], sizes[layer_idx+1], True))
         if layer_idx < num_layers - 1:
-            layers.append(activation())
+            layers.append(torch.nn.Dropout(0.1))
+            layers.append(torch.nn.PReLU())
         else:
             layers.append(output_activation())
 
